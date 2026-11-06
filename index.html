@@ -18,6 +18,7 @@
     --outline: #79747e;
     --error: #b3261e;
     --disclaimer: #888888;
+    --point: #b3261e;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -31,6 +32,7 @@
       --outline: #938f99;
       --error: #f2b8b5;
       --disclaimer: #888888;
+      --point: #ffb4ab;
     }
   }
   * { box-sizing: border-box; }
@@ -132,6 +134,21 @@
     border: solid var(--on-primary); border-width: 0 2px 2px 0; transform: rotate(45deg);
   }
 
+  .chart { width: 100%; }
+  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .chart .axis { stroke: var(--outline); stroke-width: 1; }
+  .chart .grid { stroke: var(--outline); stroke-opacity: .18; stroke-width: 1; }
+  .chart .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .chart .axis-title { fill: var(--muted); font-size: 12px; }
+  .chart .before { stroke: var(--muted); stroke-width: 2; stroke-dasharray: 6 5; fill: none; }
+  .chart .after { stroke: var(--primary); stroke-width: 2.5; fill: none; }
+  .chart .pt { fill: var(--point); stroke: var(--bg); stroke-width: 1.5; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .legend span { display: inline-flex; align-items: center; gap: 8px; }
+  .legend i { display: inline-block; width: 22px; height: 0; border-top: 2.5px solid var(--primary); }
+  .legend i.b { border-top: 2px dashed var(--muted); }
+  .legend i.p { width: 9px; height: 9px; border: 0; border-radius: 50%; background: var(--point); }
+
   .result { font-weight: 700; font-size: 20px; white-space: pre-line; margin: 0; }
   .result.small { font-size: 18px; }
   .section-title { font-weight: 700; font-size: 20px; margin: 0; }
@@ -213,6 +230,7 @@
       <label for="corrected1">Corrected / target value</label>
     </div>
     <p class="result" id="oneResult">Enter valid values</p>
+    <div class="chart" id="oneChart" hidden></div>
   </section>
 
   <section id="regression" hidden style="display:flex;flex-direction:column;gap:16px">
@@ -221,6 +239,7 @@
     <label class="check"><input type="checkbox" id="zeroIntercept"> Force intercept to zero (regression through origin)</label>
     <div id="pairs" style="display:flex;flex-direction:column;gap:16px"></div>
     <p class="result small" id="regResult">Enter at least 2 valid measured/corrected pairs</p>
+    <div class="chart" id="regChart" hidden></div>
   </section>
 
   <button class="filled" id="aboutBtn" type="button">About</button>
@@ -295,6 +314,62 @@ Users are responsible for verifying all calculations according to manufacturer i
     };
   }
 
+  // ---- Before/after chart (inline SVG, no libraries) ----
+  function niceTicks(lo, hi, count) {
+    const raw = (hi - lo) / count;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+    const ticks = [];
+    for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) ticks.push(+v.toPrecision(12));
+    return ticks;
+  }
+  const fmtTick = (v) => String(+v.toPrecision(6));
+
+  function drawChart(el, xs, ys, slope, intercept, includeZero) {
+    el.hidden = false;
+    const W = Math.max(280, el.clientWidth || 360);
+    const H = Math.round(Math.min(W * 0.8, 380));
+    const m = { l: 52, r: 12, t: 10, b: 44 };
+
+    // Same range on both axes so the "before" line (y = x) is a true diagonal
+    const vals = xs.concat(ys);
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    if (includeZero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+    if (hi === lo) { const d = Math.abs(hi) * 0.1 || 1; lo -= d; hi += d; }
+    const pad = (hi - lo) * 0.08;
+    lo -= pad; hi += pad;
+
+    const px = (v) => m.l + (v - lo) / (hi - lo) * (W - m.l - m.r);
+    const py = (v) => H - m.b - (v - lo) / (hi - lo) * (H - m.t - m.b);
+    const ticks = niceTicks(lo, hi, W < 400 ? 5 : 7);
+
+    let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Measured versus corrected values with before and after lines">`;
+    s += `<defs><clipPath id="${el.id}-clip"><rect x="${m.l}" y="${m.t}" width="${W - m.l - m.r}" height="${H - m.t - m.b}"/></clipPath></defs>`;
+    for (const t of ticks) {
+      s += `<line class="grid" x1="${px(t)}" x2="${px(t)}" y1="${m.t}" y2="${H - m.b}"/>`;
+      s += `<line class="grid" x1="${m.l}" x2="${W - m.r}" y1="${py(t)}" y2="${py(t)}"/>`;
+      s += `<text class="tick" x="${px(t)}" y="${H - m.b + 16}" text-anchor="middle">${fmtTick(t)}</text>`;
+      s += `<text class="tick" x="${m.l - 6}" y="${py(t) + 4}" text-anchor="end">${fmtTick(t)}</text>`;
+    }
+    s += `<line class="axis" x1="${m.l}" x2="${W - m.r}" y1="${H - m.b}" y2="${H - m.b}"/>`;
+    s += `<line class="axis" x1="${m.l}" x2="${m.l}" y1="${m.t}" y2="${H - m.b}"/>`;
+    s += `<text class="axis-title" x="${(m.l + W - m.r) / 2}" y="${H - 6}" text-anchor="middle">Measured</text>`;
+    s += `<text class="axis-title" transform="translate(13 ${(m.t + H - m.b) / 2}) rotate(-90)" text-anchor="middle">Corrected</text>`;
+    s += `<g clip-path="url(#${el.id}-clip)">`;
+    s += `<line class="before" x1="${px(lo)}" y1="${py(lo)}" x2="${px(hi)}" y2="${py(hi)}"/>`;
+    s += `<line class="after" x1="${px(lo)}" y1="${py(slope * lo + intercept)}" x2="${px(hi)}" y2="${py(slope * hi + intercept)}"/>`;
+    s += `</g>`;
+    for (let i = 0; i < xs.length; i++) s += `<circle class="pt" cx="${px(xs[i])}" cy="${py(ys[i])}" r="5"/>`;
+    s += `</svg>`;
+
+    const sign = intercept < 0 ? '−' : '+';
+    const eq = intercept === 0
+      ? `y = ${f6(slope)}·x`
+      : `y = ${f6(slope)}·x ${sign} ${f6(Math.abs(intercept))}`;
+    s += `<div class="legend"><span><i class="b"></i>Before (y = x)</span><span><i></i>After (${eq})</span><span><i class="p"></i>Data points</span></div>`;
+    el.innerHTML = s;
+  }
+
   // Build the 10 measured/corrected rows
   const pairs = $('pairs');
   for (let i = 1; i <= ROWS; i++) {
@@ -317,15 +392,15 @@ Users are responsible for verifying all calculations according to manufacturer i
     if (onePointMode) {
       const m = num($('measured1').value);
       const c = num($('corrected1').value);
-      $('oneResult').textContent =
-        (origSlope !== null && m !== null && c !== null && m !== 0)
-          ? 'New slope = ' + f6(origSlope * (c / m))
-          : 'Enter valid values';
+      const ok = origSlope !== null && m !== null && c !== null && m !== 0;
+      $('oneResult').textContent = ok ? 'New slope = ' + f6(origSlope * (c / m)) : 'Enter valid values';
+      if (ok) drawChart($('oneChart'), [m], [c], c / m, 0, true);
+      else $('oneChart').hidden = true;
     } else {
       let result = null;
+      const xs = [], ys = [];
       if (origSlope !== null && origIntercept !== null) {
         // Use rows where both values are valid, keeping each measured value with its own corrected value.
-        const xs = [], ys = [];
         let halfFilled = false;
         for (let i = 1; i <= ROWS; i++) {
           const x = num($('m' + i).value), y = num($('c' + i).value);
@@ -337,6 +412,8 @@ Users are responsible for verifying all calculations according to manufacturer i
       $('regResult').textContent = result
         ? `Regression slope = ${f6(result.slope)}\nRegression intercept = ${f6(result.intercept)}\n\nNew slope = ${f6(result.newSlope)}\nNew intercept = ${f6(result.newIntercept)}`
         : 'Enter at least 2 valid measured/corrected pairs';
+      if (result) drawChart($('regChart'), xs, ys, result.slope, result.intercept, $('zeroIntercept').checked);
+      else $('regChart').hidden = true;
     }
 
     // Light red outline on anything that isn't a number
@@ -347,6 +424,8 @@ Users are responsible for verifying all calculations according to manufacturer i
 
   document.addEventListener('input', update);
   document.addEventListener('change', update);
+  let resizeTimer;
+  window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(update, 150); });
 
   const dlg = $('about');
   $('aboutBtn').addEventListener('click', () => dlg.showModal());
